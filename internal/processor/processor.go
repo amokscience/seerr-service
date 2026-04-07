@@ -1,9 +1,9 @@
-// Package processor defines the SQS message schema and orchestrates
-// parsing + forwarding to the Seerr API.
+// Package processor parses SQS messages and orchestrates forwarding to the Seerr API.
 package processor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -12,146 +12,111 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/amokscience/seerr-service/internal/pushover"
 	"github.com/amokscience/seerr-service/internal/seerr"
 )
 
-// MediaType represents the kind of media being requested.
-type MediaType string
-
-const (
-	MediaTypeMovie MediaType = "movie"
-	MediaTypeTV    MediaType = "tv"    // includes anime series
-	MediaTypeAnime MediaType = "anime" // treated as tv with an anime flag
-)
-
-// MediaRequest is the expected JSON structure of an SQS message body.
-// TODO: adjust fields once the upstream message format is confirmed.
-type MediaRequest struct {
-	MediaType MediaType `json:"mediaType"`        // "movie" | "tv" | "anime"
-	Title     string    `json:"title"`            // human-readable title (for logging)
-	TmdbID    int       `json:"tmdbId"`           // The Movie Database ID (required for movies/TV)
-	TvdbID    int       `json:"tvdbId,omitempty"` // TheTVDB ID (optional supplement)
-	// TV / anime specific
-	Seasons []int `json:"seasons,omitempty"` // empty = request all seasons
-	// TODO: add additional fields (e.g. user ID, priority) as needed
+// message is the expected JSON structure of an SQS message body.
+//
+// {"name":"Rocky"}
+type message struct {
+	Name string `json:"name"` // title to search for in Seerr
 }
 
 // Processor orchestrates message processing.
 type Processor struct {
-	seerrClient *seerr.Client
-	log         *slog.Logger
+	seerrClient    *seerr.Client
+	pushoverClient *pushover.Client
+	log            *slog.Logger
 }
 
 // New creates a new Processor.
-func New(client *seerr.Client, log *slog.Logger) *Processor {
+func New(seerrClient *seerr.Client, pushoverClient *pushover.Client, log *slog.Logger) *Processor {
 	return &Processor{
-		seerrClient: client,
-		log:         log,
+		seerrClient:    seerrClient,
+		pushoverClient: pushoverClient,
+		log:            log,
 	}
 }
 
 // Process is invoked by the SQS consumer for every received message.
-//
-// TODO: replace the hardcoded stub below with real message parsing once the
-// SQS message schema is confirmed.
+// On any error, a Pushover notification is sent before the error is returned.
 func (p *Processor) Process(ctx context.Context, body string) error {
-	p.log.Info("received SQS message body (stub – body ignored for now)",
-		slog.String("body", body),
-	)
-
-	// ── STUB: use a hardcoded request instead of parsing the message body ─────
-	req := hardcodedRockyRequest()
-	// ── END STUB ──────────────────────────────────────────────────────────────
-
-	return p.submit(ctx, req)
-}
-
-// ProcessHardcoded sends the hardcoded Rocky movie request directly to Seerr,
-// bypassing SQS entirely. Useful for smoke-testing the Seerr integration.
-func (p *Processor) ProcessHardcoded(ctx context.Context) error {
-	return p.submit(ctx, hardcodedRockyRequest())
-}
-
-// submit validates a MediaRequest and forwards it to the Seerr API.
-func (p *Processor) submit(ctx context.Context, req *MediaRequest) error {
-	ctx, span := otel.Tracer("seerr-service").Start(ctx, "processor.submit",
+	ctx, span := otel.Tracer("seerr-service").Start(ctx, "processor.Process",
 		trace.WithSpanKind(trace.SpanKindInternal),
-		trace.WithAttributes(
-			attribute.String("media.type", string(req.MediaType)),
-			attribute.String("media.title", req.Title),
-			attribute.Int("media.tmdb_id", req.TmdbID),
-		),
 	)
 	defer span.End()
 
-	p.log.InfoContext(ctx, "submitting media request",
-		slog.String("mediaType", string(req.MediaType)),
-		slog.String("title", req.Title),
-		slog.Int("tmdbId", req.TmdbID),
-	)
-
-	if err := p.validate(req); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return fmt.Errorf("invalid media request: %w", err)
-	}
-
-	seerrReq := p.toSeerrRequest(req)
-
-	resp, err := p.seerrClient.CreateRequest(ctx, seerrReq)
+	err := p.process(ctx, span, body)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		return fmt.Errorf("seerr request failed: %w", err)
+	}
+	return err
+}
+
+func (p *Processor) process(ctx context.Context, span trace.Span, body string) error {
+	// 1. Parse the incoming message.
+	var msg message
+	if err := json.Unmarshal([]byte(body), &msg); err != nil {
+		return p.notifyAndReturn(ctx, "", fmt.Errorf("parse message: %w", err))
+	}
+	if msg.Name == "" {
+		return p.notifyAndReturn(ctx, "", fmt.Errorf("message missing required field: name"))
+	}
+
+	span.SetAttributes(attribute.String("media.name", msg.Name))
+	p.log.InfoContext(ctx, "processing media request", slog.String("name", msg.Name))
+
+	// 2. Resolve name to TMDB ID via Seerr search. Take the first result.
+	result, err := p.seerrClient.Search(ctx, msg.Name)
+	if err != nil {
+		return p.notifyAndReturn(ctx, msg.Name, fmt.Errorf("search %q: %w", msg.Name, err))
+	}
+
+	span.SetAttributes(
+		attribute.Int("media.tmdb_id", result.ID),
+		attribute.String("media.type", result.MediaType),
+		attribute.String("media.title", result.DisplayName()),
+	)
+
+	// 3. Submit the request to Seerr.
+	payload := &seerr.RequestPayload{
+		MediaType: result.MediaType,
+		MediaID:   result.ID,
+	}
+
+	resp, err := p.seerrClient.CreateRequest(ctx, payload)
+	if err != nil {
+		return p.notifyAndReturn(ctx, msg.Name, fmt.Errorf("create request for %q (tmdbId=%d): %w", result.DisplayName(), result.ID, err))
 	}
 
 	span.SetAttributes(attribute.Int("seerr.request_id", resp.ID))
 	p.log.InfoContext(ctx, "seerr request created",
+		slog.String("name", msg.Name),
+		slog.String("matchedTitle", result.DisplayName()),
+		slog.String("mediaType", result.MediaType),
+		slog.Int("tmdbId", result.ID),
 		slog.Int("requestId", resp.ID),
-		slog.String("status", resp.Status),
+		slog.Int("status", resp.Status),
 	)
 
 	return nil
 }
 
-// hardcodedRockyRequest returns a stub MediaRequest for the movie "Rocky" (1976).
-// TMDB ID 1366 – https://www.themoviedb.org/movie/1366
-//
-// TODO: remove once real SQS message parsing is implemented.
-func hardcodedRockyRequest() *MediaRequest {
-	return &MediaRequest{
-		MediaType: MediaTypeMovie,
-		Title:     "Rocky",
-		TmdbID:    1366,
-	}
-}
-
-// validate performs basic sanity checks on an incoming MediaRequest.
-func (p *Processor) validate(req *MediaRequest) error {
-	if req.TmdbID == 0 {
-		return fmt.Errorf("tmdbId is required")
-	}
-	switch req.MediaType {
-	case MediaTypeMovie, MediaTypeTV, MediaTypeAnime:
-	default:
-		return fmt.Errorf("unknown mediaType %q", req.MediaType)
-	}
-	return nil
-}
-
-// toSeerrRequest converts an internal MediaRequest into the Seerr API payload.
-func (p *Processor) toSeerrRequest(req *MediaRequest) *seerr.RequestPayload {
-	// Seerr treats everything with seasons as "tv"; anime is flagged separately.
-	mediaType := string(req.MediaType)
-	if req.MediaType == MediaTypeAnime {
-		mediaType = "tv"
+// notifyAndReturn sends a Pushover notification for the error then returns it.
+// name may be empty if the media name could not be determined (e.g. parse failure).
+func (p *Processor) notifyAndReturn(ctx context.Context, name string, err error) error {
+	title := "seerr-service error"
+	var msg string
+	if name != "" {
+		title = fmt.Sprintf("Failed: %s", name)
+		msg = fmt.Sprintf("Could not request \"%s\": %s", name, err.Error())
+	} else {
+		msg = fmt.Sprintf("Message processing error: %s", err.Error())
 	}
 
-	return &seerr.RequestPayload{
-		MediaType: mediaType,
-		MediaID:   req.TmdbID,
-		TvdbID:    req.TvdbID,
-		Seasons:   req.Seasons,
-		IsAnime:   req.MediaType == MediaTypeAnime,
-	}
+	p.log.ErrorContext(ctx, "processing error", slog.String("error", err.Error()))
+	p.pushoverClient.Notify(ctx, title, msg)
+	return err
 }

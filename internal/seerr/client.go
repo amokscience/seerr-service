@@ -10,32 +10,56 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 const (
-	// TODO: verify path once target Seerr instance version is confirmed
 	requestEndpoint = "/api/v1/request"
-	searchEndpoint  = "/api/v1/search" // reserved for future use
+	searchEndpoint  = "/api/v1/search"
 )
 
+// SearchResult is a single item returned by GET /api/v1/search.
+type SearchResult struct {
+	ID        int    `json:"id"`
+	MediaType string `json:"mediaType"` // "movie", "tv", or "person"
+	Title     string `json:"title"`     // populated for movies
+	Name      string `json:"name"`      // populated for TV shows
+}
+
+// DisplayName returns whichever of Title or Name is non-empty.
+func (s *SearchResult) DisplayName() string {
+	if s.Title != "" {
+		return s.Title
+	}
+	return s.Name
+}
+
+// searchResponse is the envelope returned by GET /api/v1/search.
+type searchResponse struct {
+	Results []SearchResult `json:"results"`
+}
+
 // RequestPayload is the body sent to POST /api/v1/request.
-// TODO: expand fields (e.g. serverId, profileId) once Seerr config is known.
 type RequestPayload struct {
-	MediaType string `json:"mediaType"` // "movie" or "tv"
-	MediaID   int    `json:"mediaId"`   // TMDB ID
-	TvdbID    int    `json:"tvdbId,omitempty"`
-	Seasons   []int  `json:"seasons,omitempty"` // nil/empty = all seasons
-	IsAnime   bool   `json:"is4k,omitempty"`    // TODO: confirm anime flag field name
+	MediaType         string `json:"mediaType"`                   // "movie" or "tv"
+	MediaID           int    `json:"mediaId"`                     // TMDB ID
+	TvdbID            int    `json:"tvdbId,omitempty"`            // optional TheTVDB ID
+	Seasons           []int  `json:"seasons,omitempty"`           // TV only; omit for movies
+	Is4K              bool   `json:"is4k,omitempty"`              // request 4K version
+	ServerID          int    `json:"serverId,omitempty"`          // Radarr/Sonarr server ID
+	ProfileID         int    `json:"profileId,omitempty"`         // quality profile ID
+	RootFolder        string `json:"rootFolder,omitempty"`        // download root folder
+	LanguageProfileID int    `json:"languageProfileId,omitempty"` // Sonarr language profile
+	UserID            int    `json:"userId,omitempty"`            // override requesting user
 }
 
 // RequestResponse is the subset of the response body we care about.
-// TODO: fill in additional fields from the Seerr API response as needed.
 type RequestResponse struct {
-	ID     int    `json:"id"`
-	Status string `json:"status"`
+	ID     int `json:"id"`
+	Status int `json:"status"` // 1 = pending approval, 2 = approved, 3 = declined, 4 = available
 }
 
 // Client is an HTTP client scoped to a single Seerr instance.
@@ -74,9 +98,10 @@ func (c *Client) CreateRequest(ctx context.Context, payload *RequestPayload) (*R
 
 	c.setHeaders(req)
 
-	c.log.Debug("calling seerr API",
+	c.log.InfoContext(ctx, "sending request to Seerr API",
 		slog.String("url", url),
-		slog.String("payload", string(body)),
+		slog.String("mediaType", payload.MediaType),
+		slog.Int("mediaId", payload.MediaID),
 	)
 
 	resp, err := c.httpClient.Do(req)
@@ -90,6 +115,10 @@ func (c *Client) CreateRequest(ctx context.Context, payload *RequestPayload) (*R
 		return nil, fmt.Errorf("read response body: %w", err)
 	}
 
+	c.log.InfoContext(ctx, "Seerr API response received",
+		slog.Int("statusCode", resp.StatusCode),
+	)
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("seerr returned %d: %s", resp.StatusCode, string(respBody))
 	}
@@ -100,6 +129,55 @@ func (c *Client) CreateRequest(ctx context.Context, payload *RequestPayload) (*R
 	}
 
 	return &result, nil
+}
+
+// Search queries Seerr for the given title and returns the first non-person
+// result (i.e. the first "movie" or "tv" entry). Results are ordered by
+// Seerr's relevance/popularity ranking so the first match is the best one.
+// Returns an error if no results are found or the HTTP call fails.
+func (c *Client) Search(ctx context.Context, query string) (*SearchResult, error) {
+	u := c.baseURL + searchEndpoint + "?query=" + url.QueryEscape(query)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build search request: %w", err)
+	}
+	c.setHeaders(req)
+
+	c.log.InfoContext(ctx, "searching Seerr", slog.String("query", query))
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http do: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read search response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("search returned %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var sr searchResponse
+	if err := json.Unmarshal(respBody, &sr); err != nil {
+		return nil, fmt.Errorf("unmarshal search response: %w", err)
+	}
+
+	for i := range sr.Results {
+		if sr.Results[i].MediaType == "movie" || sr.Results[i].MediaType == "tv" {
+			c.log.InfoContext(ctx, "Seerr search matched",
+				slog.Int("tmdbId", sr.Results[i].ID),
+				slog.String("mediaType", sr.Results[i].MediaType),
+				slog.String("title", sr.Results[i].DisplayName()),
+			)
+			return &sr.Results[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("no results found for %q", query)
 }
 
 // Ping verifies connectivity to the Seerr API.

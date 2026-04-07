@@ -12,6 +12,7 @@ import (
 
 	svcconfig "github.com/amokscience/seerr-service/internal/config"
 	"github.com/amokscience/seerr-service/internal/processor"
+	"github.com/amokscience/seerr-service/internal/pushover"
 	"github.com/amokscience/seerr-service/internal/seerr"
 	sqsconsumer "github.com/amokscience/seerr-service/internal/sqsconsumer"
 	"github.com/amokscience/seerr-service/internal/telemetry"
@@ -70,7 +71,9 @@ func main() {
 	// Dependencies
 	// -------------------------------------------------------------------------
 	seerrClient := seerr.New(cfg.SeerrBaseURL, cfg.SeerrAPIKey, log)
-	proc := processor.New(seerrClient, log)
+	pushoverClient := pushover.New(cfg.PushoverWebhookURL, cfg.PushoverToken, log)
+	pushoverClient.Notify(context.Background(), "seerr-service starting", "Connected and polling SQS queue.")
+	proc := processor.New(seerrClient, pushoverClient, log)
 	consumer := sqsconsumer.New(awsCfg, cfg, log)
 
 	// -------------------------------------------------------------------------
@@ -103,19 +106,6 @@ func main() {
 	// -------------------------------------------------------------------------
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-
-	// -------------------------------------------------------------------------
-	// Startup smoke test – send the hardcoded Rocky request to Seerr once to
-	// verify connectivity before entering the SQS loop.
-	// TODO: remove this block once real end-to-end testing is in place.
-	// -------------------------------------------------------------------------
-	log.Info("running startup smoke test: submitting hardcoded Rocky request to Seerr")
-	if err := proc.ProcessHardcoded(ctx); err != nil {
-		log.Error("startup smoke test failed", slog.String("error", err.Error()))
-		// Non-fatal – log and continue so the SQS loop still starts.
-	} else {
-		log.Info("startup smoke test succeeded")
-	}
 
 	// -------------------------------------------------------------------------
 	// SQS consumer loop

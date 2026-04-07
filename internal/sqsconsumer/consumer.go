@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -69,10 +70,33 @@ func (c *Consumer) Run(ctx context.Context, handler HandlerFunc) error {
 			continue
 		}
 
+		if len(msgs) > 0 {
+			c.log.Info("SQS messages received", slog.Int("count", len(msgs)))
+		}
+
 		for _, msg := range msgs {
+			msgID := aws.ToString(msg.MessageId)
+
+			// Poison-pill guard: discard messages that have been received too many
+			// times to prevent a bad message from blocking the queue indefinitely.
+			if rc := receiveCount(msg); rc > 10 {
+				c.log.Error("discarding poison-pill message (ApproximateReceiveCount > 10)",
+					slog.String("messageId", msgID),
+					slog.Int("receiveCount", rc),
+					slog.String("body", aws.ToString(msg.Body)),
+				)
+				if err := c.delete(ctx, msg); err != nil {
+					c.log.Error("failed to delete poison-pill message",
+						slog.String("messageId", msgID),
+						slog.String("error", err.Error()),
+					)
+				}
+				continue
+			}
+
 			if err := c.handle(ctx, msg, handler); err != nil {
-				c.log.Error("failed to handle SQS message",
-					slog.String("messageId", aws.ToString(msg.MessageId)),
+				c.log.Error("failed to process SQS message",
+					slog.String("messageId", msgID),
 					slog.String("error", err.Error()),
 				)
 				// Leave the message in the queue; it will re-appear after VisibilityTimeout.
@@ -81,12 +105,26 @@ func (c *Consumer) Run(ctx context.Context, handler HandlerFunc) error {
 
 			if err := c.delete(ctx, msg); err != nil {
 				c.log.Error("failed to delete SQS message",
-					slog.String("messageId", aws.ToString(msg.MessageId)),
+					slog.String("messageId", msgID),
 					slog.String("error", err.Error()),
 				)
 			}
 		}
 	}
+}
+
+// receiveCount returns the ApproximateReceiveCount attribute of a message, or 0
+// if the attribute is absent or unparseable.
+func receiveCount(msg types.Message) int {
+	v, ok := msg.Attributes[string(types.MessageSystemAttributeNameApproximateReceiveCount)]
+	if !ok {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // poll performs a long-poll ReceiveMessage call.
@@ -120,7 +158,7 @@ func (c *Consumer) handle(ctx context.Context, msg types.Message, handler Handle
 	defer span.End()
 
 	body := aws.ToString(msg.Body)
-	c.log.DebugContext(ctx, "received SQS message",
+	c.log.InfoContext(ctx, "SQS message received, beginning processing",
 		slog.String("messageId", msgID),
 		slog.Int("bodyLen", len(body)),
 	)
@@ -135,6 +173,7 @@ func (c *Consumer) handle(ctx context.Context, msg types.Message, handler Handle
 
 // delete removes a successfully processed message from the queue.
 func (c *Consumer) delete(ctx context.Context, msg types.Message) error {
+	msgID := aws.ToString(msg.MessageId)
 	_, err := c.client.DeleteMessage(ctx, &sqs.DeleteMessageInput{
 		QueueUrl:      aws.String(c.cfg.SQSQueueURL),
 		ReceiptHandle: msg.ReceiptHandle,
@@ -142,8 +181,8 @@ func (c *Consumer) delete(ctx context.Context, msg types.Message) error {
 	if err != nil {
 		return fmt.Errorf("DeleteMessage: %w", err)
 	}
-	c.log.Debug("deleted SQS message",
-		slog.String("messageId", aws.ToString(msg.MessageId)),
+	c.log.InfoContext(ctx, "SQS message deleted from queue",
+		slog.String("messageId", msgID),
 	)
 	return nil
 }

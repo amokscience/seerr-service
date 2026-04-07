@@ -35,6 +35,10 @@ type Config struct {
 	OTelEndpoint    string // OTEL_EXPORTER_OTLP_ENDPOINT  e.g. otel-collector:4317
 	OTelServiceName string // OTEL_SERVICE_NAME
 
+	// Pushover notifications
+	PushoverWebhookURL string // PUSHOVER_URL   – webhook URL (encodes recipient)
+	PushoverToken      string // PUSHOVER_TOKEN – application token
+
 	// Service
 	LogLevel   string
 	HealthPort string
@@ -66,6 +70,9 @@ func Load(log *slog.Logger) (*Config, error) {
 		OTelEnabled:     getEnvBool("OTEL_ENABLED", false),
 		OTelEndpoint:    getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 		OTelServiceName: getEnv("OTEL_SERVICE_NAME", "seerr-service"),
+
+		PushoverWebhookURL: getEnv("PUSHOVER_URL", ""),
+		PushoverToken:      getEnv("PUSHOVER_TOKEN", ""),
 
 		LogLevel:   getEnv("LOG_LEVEL", "info"),
 		HealthPort: getEnv("HEALTH_PORT", "8080"),
