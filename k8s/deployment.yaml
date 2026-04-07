@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seerr-service
+  namespace: media          # TODO: update namespace as needed
+  labels:
+    app: seerr-service
+spec:
+  replicas: 1               # Single replica is typical for a queue consumer
+  selector:
+    matchLabels:
+      app: seerr-service
+  template:
+    metadata:
+      labels:
+        app: seerr-service
+    spec:
+      # TODO: add a serviceAccountName wired to an IAM role (IRSA) for SQS access
+      # serviceAccountName: seerr-service-sa
+      containers:
+        - name: seerr-service
+          image: ghcr.io/amokscience/seerr-service:latest  # TODO: pin to a digest in production
+          imagePullPolicy: Always
+          ports:
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: seerr-service-config
+          env:
+            # Sensitive values are injected from the Secret
+            - name: SEERR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: seerr-service-secret
+                  key: seerr-api-key
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534      # nobody
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+      restartPolicy: Always

@@ -1,0 +1,12 @@
+# Binaries
+seerr-service
+*.exe
+
+# Test output
+*.out
+coverage.html
+
+# Env files with secrets
+.env
+.env.*
+!.env.example
