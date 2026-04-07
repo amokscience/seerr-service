@@ -62,7 +62,7 @@ func Load(log *slog.Logger) (*Config, error) {
 		SQSMaxMessages:       int32(getEnvInt("SQS_MAX_MESSAGES", 10)),
 		SQSVisibilityTimeout: int32(getEnvInt("SQS_VISIBILITY_TIMEOUT", 30)),
 		SQSWaitTimeSeconds:   int32(getEnvInt("SQS_WAIT_TIME_SECONDS", 20)),
-		SQSPollingInterval:   time.Duration(getEnvInt("SQS_POLLING_INTERVAL_MS", 500)) * time.Millisecond,
+		SQSPollingInterval:   time.Duration(getEnvInt("SQS_POLLING_INTERVAL_MS", 5000)) * time.Millisecond,
 
 		SeerrBaseURL: getEnv("SEERR_BASE_URL", ""),
 		SeerrAPIKey:  getEnv("SEERR_API_KEY", ""),

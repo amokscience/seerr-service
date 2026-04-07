@@ -7,8 +7,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 
 	svcconfig "github.com/amokscience/seerr-service/internal/config"
 	"github.com/amokscience/seerr-service/internal/processor"
@@ -31,15 +33,18 @@ func main() {
 	// -------------------------------------------------------------------------
 	// Configuration
 	// -------------------------------------------------------------------------
+	t := time.Now()
 	cfg, err := svcconfig.Load(log)
 	if err != nil {
 		log.Error("failed to load configuration", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+	log.Info("startup: config loaded", slog.Duration("elapsed", time.Since(t)))
 
 	// -------------------------------------------------------------------------
 	// OpenTelemetry
 	// -------------------------------------------------------------------------
+	t = time.Now()
 	otelShutdown, err := telemetry.Setup(context.Background(),
 		cfg.OTelServiceName,
 		cfg.OTelEndpoint,
@@ -50,6 +55,7 @@ func main() {
 		log.Error("failed to initialise opentelemetry", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+	log.Info("startup: otel ready", slog.Duration("elapsed", time.Since(t)))
 	defer func() {
 		if err := otelShutdown(context.Background()); err != nil {
 			log.Error("opentelemetry shutdown error", slog.String("error", err.Error()))
@@ -59,20 +65,31 @@ func main() {
 	// -------------------------------------------------------------------------
 	// AWS SDK
 	// -------------------------------------------------------------------------
+	t = time.Now()
 	awsCfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion(cfg.AWSRegion),
+		// Supply credentials directly so the SDK never walks the credential chain
+		// (which includes a slow IMDS probe when running outside AWS).
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
+			cfg.AWSAccessKeyID,
+			cfg.AWSSecretAccessKey,
+			"",
+		)),
 	)
 	if err != nil {
 		log.Error("failed to load AWS config", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+	log.Info("startup: AWS SDK ready", slog.Duration("elapsed", time.Since(t)))
 
 	// -------------------------------------------------------------------------
 	// Dependencies
 	// -------------------------------------------------------------------------
 	seerrClient := seerr.New(cfg.SeerrBaseURL, cfg.SeerrAPIKey, log)
 	pushoverClient := pushover.New(cfg.PushoverWebhookURL, cfg.PushoverToken, log)
+	t = time.Now()
 	pushoverClient.Notify(context.Background(), "seerr-service starting", "Connected and polling SQS queue.")
+	log.Info("startup: pushover notify done", slog.Duration("elapsed", time.Since(t)))
 	proc := processor.New(seerrClient, pushoverClient, log)
 	consumer := sqsconsumer.New(awsCfg, cfg, log)
 

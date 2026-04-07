@@ -136,7 +136,7 @@ func (c *Client) CreateRequest(ctx context.Context, payload *RequestPayload) (*R
 // Seerr's relevance/popularity ranking so the first match is the best one.
 // Returns an error if no results are found or the HTTP call fails.
 func (c *Client) Search(ctx context.Context, query string) (*SearchResult, error) {
-	u := c.baseURL + searchEndpoint + "?query=" + url.QueryEscape(query)
+	u := c.baseURL + searchEndpoint + "?query=" + url.PathEscape(query)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
