@@ -18,3 +18,8 @@ data:
   # Service
   LOG_LEVEL: "info"
   HEALTH_PORT: "8080"
+
+  # OpenTelemetry – set OTEL_ENABLED to "true" and supply a collector endpoint to activate tracing
+  OTEL_ENABLED: "false"
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""   # e.g. otel-collector.observability.svc.cluster.local:4317
+  OTEL_SERVICE_NAME: "seerr-service"

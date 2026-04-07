@@ -14,15 +14,17 @@ import (
 	"github.com/amokscience/seerr-service/internal/processor"
 	"github.com/amokscience/seerr-service/internal/seerr"
 	sqsconsumer "github.com/amokscience/seerr-service/internal/sqsconsumer"
+	"github.com/amokscience/seerr-service/internal/telemetry"
 )
 
 func main() {
 	// -------------------------------------------------------------------------
-	// Logger
+	// Logger  (JSON + trace context bridge)
 	// -------------------------------------------------------------------------
-	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	baseHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
-	}))
+	})
+	log := slog.New(telemetry.NewTraceHandler(baseHandler))
 	slog.SetDefault(log)
 
 	// -------------------------------------------------------------------------
@@ -33,6 +35,25 @@ func main() {
 		log.Error("failed to load configuration", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+
+	// -------------------------------------------------------------------------
+	// OpenTelemetry
+	// -------------------------------------------------------------------------
+	otelShutdown, err := telemetry.Setup(context.Background(),
+		cfg.OTelServiceName,
+		cfg.OTelEndpoint,
+		cfg.OTelEnabled,
+		log,
+	)
+	if err != nil {
+		log.Error("failed to initialise opentelemetry", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer func() {
+		if err := otelShutdown(context.Background()); err != nil {
+			log.Error("opentelemetry shutdown error", slog.String("error", err.Error()))
+		}
+	}()
 
 	// -------------------------------------------------------------------------
 	// AWS SDK
@@ -82,6 +103,19 @@ func main() {
 	// -------------------------------------------------------------------------
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	// -------------------------------------------------------------------------
+	// Startup smoke test – send the hardcoded Rocky request to Seerr once to
+	// verify connectivity before entering the SQS loop.
+	// TODO: remove this block once real end-to-end testing is in place.
+	// -------------------------------------------------------------------------
+	log.Info("running startup smoke test: submitting hardcoded Rocky request to Seerr")
+	if err := proc.ProcessHardcoded(ctx); err != nil {
+		log.Error("startup smoke test failed", slog.String("error", err.Error()))
+		// Non-fatal – log and continue so the SQS loop still starts.
+	} else {
+		log.Info("startup smoke test succeeded")
+	}
 
 	// -------------------------------------------------------------------------
 	// SQS consumer loop

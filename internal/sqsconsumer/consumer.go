@@ -11,6 +11,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/amokscience/seerr-service/internal/config"
 )
@@ -101,14 +105,32 @@ func (c *Consumer) poll(ctx context.Context) ([]types.Message, error) {
 	return out.Messages, nil
 }
 
-// handle invokes the HandlerFunc for a single message.
+// handle invokes the HandlerFunc for a single message, wrapped in a trace span.
 func (c *Consumer) handle(ctx context.Context, msg types.Message, handler HandlerFunc) error {
+	msgID := aws.ToString(msg.MessageId)
+
+	ctx, span := otel.Tracer("seerr-service").Start(ctx, "sqs.message.process",
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "aws_sqs"),
+			attribute.String("messaging.destination", c.cfg.SQSQueueURL),
+			attribute.String("messaging.message_id", msgID),
+		),
+	)
+	defer span.End()
+
 	body := aws.ToString(msg.Body)
-	c.log.Debug("received SQS message",
-		slog.String("messageId", aws.ToString(msg.MessageId)),
+	c.log.DebugContext(ctx, "received SQS message",
+		slog.String("messageId", msgID),
 		slog.Int("bodyLen", len(body)),
 	)
-	return handler(ctx, body)
+
+	if err := handler(ctx, body); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return err
+	}
+	return nil
 }
 
 // delete removes a successfully processed message from the queue.

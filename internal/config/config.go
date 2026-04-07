@@ -30,6 +30,11 @@ type Config struct {
 	SeerrBaseURL string
 	SeerrAPIKey  string
 
+	// OpenTelemetry
+	OTelEnabled     bool
+	OTelEndpoint    string // OTEL_EXPORTER_OTLP_ENDPOINT  e.g. otel-collector:4317
+	OTelServiceName string // OTEL_SERVICE_NAME
+
 	// Service
 	LogLevel   string
 	HealthPort string
@@ -57,6 +62,10 @@ func Load(log *slog.Logger) (*Config, error) {
 
 		SeerrBaseURL: getEnv("SEERR_BASE_URL", ""),
 		SeerrAPIKey:  getEnv("SEERR_API_KEY", ""),
+
+		OTelEnabled:     getEnvBool("OTEL_ENABLED", false),
+		OTelEndpoint:    getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		OTelServiceName: getEnv("OTEL_SERVICE_NAME", "seerr-service"),
 
 		LogLevel:   getEnv("LOG_LEVEL", "info"),
 		HealthPort: getEnv("HEALTH_PORT", "8080"),
@@ -129,6 +138,15 @@ func getEnvInt(key string, fallback int) int {
 	if v, ok := os.LookupEnv(key); ok {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
+		}
+	}
+	return fallback
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	if v, ok := os.LookupEnv(key); ok {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
 		}
 	}
 	return fallback

@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 const (
@@ -50,7 +52,8 @@ func New(baseURL, apiKey string, log *slog.Logger) *Client {
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		httpClient: &http.Client{
-			Timeout: 15 * time.Second,
+			Timeout:   15 * time.Second,
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		},
 		log: log,
 	}
