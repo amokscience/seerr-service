@@ -28,7 +28,7 @@ func main() {
 	// -------------------------------------------------------------------------
 	// Configuration
 	// -------------------------------------------------------------------------
-	cfg, err := svcconfig.Load()
+	cfg, err := svcconfig.Load(log)
 	if err != nil {
 		log.Error("failed to load configuration", slog.String("error", err.Error()))
 		os.Exit(1)
