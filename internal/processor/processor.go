@@ -23,9 +23,9 @@ const (
 // MediaRequest is the expected JSON structure of an SQS message body.
 // TODO: adjust fields once the upstream message format is confirmed.
 type MediaRequest struct {
-	MediaType MediaType `json:"mediaType"` // "movie" | "tv" | "anime"
-	Title     string    `json:"title"`     // human-readable title (for logging)
-	TmdbID    int       `json:"tmdbId"`    // The Movie Database ID (required for movies/TV)
+	MediaType MediaType `json:"mediaType"`        // "movie" | "tv" | "anime"
+	Title     string    `json:"title"`            // human-readable title (for logging)
+	TmdbID    int       `json:"tmdbId"`           // The Movie Database ID (required for movies/TV)
 	TvdbID    int       `json:"tvdbId,omitempty"` // TheTVDB ID (optional supplement)
 	// TV / anime specific
 	Seasons []int `json:"seasons,omitempty"` // empty = request all seasons
@@ -100,10 +100,10 @@ func (p *Processor) toSeerrRequest(req *MediaRequest) *seerr.RequestPayload {
 	}
 
 	return &seerr.RequestPayload{
-		MediaType:   mediaType,
-		MediaID:     req.TmdbID,
-		TvdbID:      req.TvdbID,
-		Seasons:     req.Seasons,
-		IsAnime:     req.MediaType == MediaTypeAnime,
+		MediaType: mediaType,
+		MediaID:   req.TmdbID,
+		TvdbID:    req.TvdbID,
+		Seasons:   req.Seasons,
+		IsAnime:   req.MediaType == MediaTypeAnime,
 	}
 }

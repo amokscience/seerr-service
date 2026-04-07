@@ -10,20 +10,20 @@ import (
 // Config holds all runtime configuration loaded from environment variables.
 type Config struct {
 	// AWS / SQS
-	AWSRegion          string
-	SQSQueueURL        string
-	SQSMaxMessages     int32
+	AWSRegion            string
+	SQSQueueURL          string
+	SQSMaxMessages       int32
 	SQSVisibilityTimeout int32
-	SQSWaitTimeSeconds int32
-	SQSPollingInterval time.Duration
+	SQSWaitTimeSeconds   int32
+	SQSPollingInterval   time.Duration
 
 	// Seerr (Overseerr / Jellyseerr)
 	SeerrBaseURL string
 	SeerrAPIKey  string
 
 	// Service
-	LogLevel    string
-	HealthPort  string
+	LogLevel   string
+	HealthPort string
 }
 
 // Load reads configuration from environment variables and validates required fields.

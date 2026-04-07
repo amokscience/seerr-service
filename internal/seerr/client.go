@@ -22,8 +22,8 @@ const (
 // RequestPayload is the body sent to POST /api/v1/request.
 // TODO: expand fields (e.g. serverId, profileId) once Seerr config is known.
 type RequestPayload struct {
-	MediaType string `json:"mediaType"`         // "movie" or "tv"
-	MediaID   int    `json:"mediaId"`            // TMDB ID
+	MediaType string `json:"mediaType"` // "movie" or "tv"
+	MediaID   int    `json:"mediaId"`   // TMDB ID
 	TvdbID    int    `json:"tvdbId,omitempty"`
 	Seasons   []int  `json:"seasons,omitempty"` // nil/empty = all seasons
 	IsAnime   bool   `json:"is4k,omitempty"`    // TODO: confirm anime flag field name

@@ -22,9 +22,9 @@ type HandlerFunc func(ctx context.Context, body string) error
 
 // Consumer polls an SQS queue and dispatches messages to a HandlerFunc.
 type Consumer struct {
-	client   *sqs.Client
-	cfg      *config.Config
-	log      *slog.Logger
+	client *sqs.Client
+	cfg    *config.Config
+	log    *slog.Logger
 }
 
 // New creates a Consumer using the provided AWS config.
@@ -88,11 +88,11 @@ func (c *Consumer) Run(ctx context.Context, handler HandlerFunc) error {
 // poll performs a long-poll ReceiveMessage call.
 func (c *Consumer) poll(ctx context.Context) ([]types.Message, error) {
 	out, err := c.client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-		QueueUrl:            aws.String(c.cfg.SQSQueueURL),
-		MaxNumberOfMessages: c.cfg.SQSMaxMessages,
-		VisibilityTimeout:   c.cfg.SQSVisibilityTimeout,
-		WaitTimeSeconds:     c.cfg.SQSWaitTimeSeconds,
-		AttributeNames:      []types.QueueAttributeName{types.QueueAttributeNameAll},
+		QueueUrl:              aws.String(c.cfg.SQSQueueURL),
+		MaxNumberOfMessages:   c.cfg.SQSMaxMessages,
+		VisibilityTimeout:     c.cfg.SQSVisibilityTimeout,
+		WaitTimeSeconds:       c.cfg.SQSWaitTimeSeconds,
+		AttributeNames:        []types.QueueAttributeName{types.QueueAttributeNameAll},
 		MessageAttributeNames: []string{"All"},
 	})
 	if err != nil {
