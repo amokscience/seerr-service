@@ -21,6 +21,10 @@ const (
 	searchEndpoint  = "/api/v1/search"
 )
 
+// ErrNoResults is returned by Search when the query produces no movie or TV results.
+// It signals a permanent failure — retrying will not help.
+var ErrNoResults = fmt.Errorf("no results found")
+
 // SearchResult is a single item returned by GET /api/v1/search.
 type SearchResult struct {
 	ID        int    `json:"id"`
@@ -177,7 +181,7 @@ func (c *Client) Search(ctx context.Context, query string) (*SearchResult, error
 		}
 	}
 
-	return nil, fmt.Errorf("no results found for %q", query)
+	return nil, fmt.Errorf("%w for %q", ErrNoResults, query)
 }
 
 // Ping verifies connectivity to the Seerr API.

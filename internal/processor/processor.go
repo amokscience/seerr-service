@@ -4,6 +4,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -71,6 +72,10 @@ func (p *Processor) process(ctx context.Context, span trace.Span, body string) e
 	// 2. Resolve name to TMDB ID via Seerr search. Take the first result.
 	result, err := p.seerrClient.Search(ctx, msg.Name)
 	if err != nil {
+		if errors.Is(err, seerr.ErrNoResults) {
+			// No results = permanent failure; notify and delete the message.
+			return p.notifyAndDelete(ctx, msg.Name, fmt.Errorf("no results found for %q", msg.Name))
+		}
 		return p.notifyAndReturn(ctx, msg.Name, fmt.Errorf("search %q: %w", msg.Name, err))
 	}
 
@@ -104,9 +109,21 @@ func (p *Processor) process(ctx context.Context, span trace.Span, body string) e
 	return nil
 }
 
-// notifyAndReturn sends a Pushover notification for the error then returns it.
-// name may be empty if the media name could not be determined (e.g. parse failure).
+// notifyAndReturn sends a Pushover notification then returns the error so the
+// SQS message stays in the queue for retry.
 func (p *Processor) notifyAndReturn(ctx context.Context, name string, err error) error {
+	p.notify(ctx, name, err)
+	return err
+}
+
+// notifyAndDelete sends a Pushover notification then returns nil so the SQS
+// message is deleted. Use for permanent failures where retrying is pointless.
+func (p *Processor) notifyAndDelete(ctx context.Context, name string, err error) error {
+	p.notify(ctx, name, err)
+	return nil
+}
+
+func (p *Processor) notify(ctx context.Context, name string, err error) {
 	title := "seerr-service error"
 	var msg string
 	if name != "" {
@@ -118,5 +135,4 @@ func (p *Processor) notifyAndReturn(ctx context.Context, name string, err error)
 
 	p.log.ErrorContext(ctx, "processing error", slog.String("error", err.Error()))
 	p.pushoverClient.Notify(ctx, title, msg)
-	return err
 }
