@@ -60,10 +60,10 @@ func (p *Processor) process(ctx context.Context, span trace.Span, body string) e
 	// 1. Parse the incoming message.
 	var msg message
 	if err := json.Unmarshal([]byte(body), &msg); err != nil {
-		return p.notifyAndReturn(ctx, "", fmt.Errorf("parse message: %w", err))
+		return p.notifyAndDelete(ctx, "", fmt.Errorf("parse message: %w", err))
 	}
 	if msg.Name == "" {
-		return p.notifyAndReturn(ctx, "", fmt.Errorf("message missing required field: name"))
+		return p.notifyAndDelete(ctx, "", fmt.Errorf("message missing required field: name"))
 	}
 
 	span.SetAttributes(attribute.String("media.name", msg.Name))
@@ -90,10 +90,13 @@ func (p *Processor) process(ctx context.Context, span trace.Span, body string) e
 		MediaType: result.MediaType,
 		MediaID:   result.ID,
 	}
+	if result.MediaType == "tv" {
+		payload.Seasons = "all"
+	}
 
 	resp, err := p.seerrClient.CreateRequest(ctx, payload)
 	if err != nil {
-		return p.notifyAndReturn(ctx, msg.Name, fmt.Errorf("create request for %q (tmdbId=%d): %w", result.DisplayName(), result.ID, err))
+		return p.notifyAndDelete(ctx, msg.Name, fmt.Errorf("create request for %q (tmdbId=%d): %w", result.DisplayName(), result.ID, err))
 	}
 
 	span.SetAttributes(attribute.Int("seerr.request_id", resp.ID))

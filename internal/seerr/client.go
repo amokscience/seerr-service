@@ -51,7 +51,7 @@ type RequestPayload struct {
 	MediaType         string `json:"mediaType"`                   // "movie" or "tv"
 	MediaID           int    `json:"mediaId"`                     // TMDB ID
 	TvdbID            int    `json:"tvdbId,omitempty"`            // optional TheTVDB ID
-	Seasons           []int  `json:"seasons,omitempty"`           // TV only; omit for movies
+	Seasons           any    `json:"seasons,omitempty"`           // TV only: []int of season numbers or the string "all"
 	Is4K              bool   `json:"is4k,omitempty"`              // request 4K version
 	ServerID          int    `json:"serverId,omitempty"`          // Radarr/Sonarr server ID
 	ProfileID         int    `json:"profileId,omitempty"`         // quality profile ID
